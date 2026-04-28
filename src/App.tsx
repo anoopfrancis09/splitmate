@@ -1,16 +1,16 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Analytics } from '@vercel/analytics/react';
 import {
   ArrowRight,
   BadgeDollarSign,
   CheckCircle2,
   Cloud,
   CloudOff,
-  Download,
   Eye,
+  FolderOpen,
   Home,
   Loader2,
   LogIn,
+  Save,
   LogOut,
   LockKeyhole,
   Plus,
@@ -18,15 +18,21 @@ import {
   RefreshCcw,
   ShieldCheck,
   Trash2,
-  Upload,
   UsersRound,
   WalletCards,
 } from 'lucide-react';
 import type { AppState, Expense, Member, SplitMode } from './types';
-import { loadBillGroupFromCloud, saveBillGroupToCloud } from './cloudStore';
+import {
+  createBillGroupInCloud,
+  deleteBillGroupFromCloud,
+  listBillGroupsFromCloud,
+  loadBillGroupFromCloud,
+  saveBillGroupToCloud,
+  type BillGroupSummary,
+} from './cloudStore';
 import { currencyOptions, formatMoney } from './money';
 import { loadLocalState, saveLocalState } from './stateUtils';
-import { isSupabaseConfigured, supabaseGroupId } from './supabaseClient';
+import { isSupabaseConfigured } from './supabaseClient';
 import {
   calculateBalances,
   calculatePairwiseSettlements,
@@ -173,10 +179,14 @@ function App() {
   const [cloudStatus, setCloudStatus] = useState<CloudStatus>('idle');
   const [cloudMessage, setCloudMessage] = useState(
     isSupabaseConfigured
-      ? 'Cloud sync is ready. Load from Supabase or save your current data.'
+      ? 'Cloud storage is ready. Select a saved bill set or create a new one.'
       : 'Cloud sync is not configured yet. The app will keep using this browser only.',
   );
   const [cloudUpdatedAt, setCloudUpdatedAt] = useState<string | null>(null);
+  const [cloudGroups, setCloudGroups] = useState<BillGroupSummary[]>([]);
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
+  const [activeGroupName, setActiveGroupName] = useState('Local unsaved bill set');
+  const [newGroupName, setNewGroupName] = useState('');
   const [role, setRole] = useState<UserRole | null>(() => getStoredRole());
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -199,13 +209,26 @@ function App() {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadInitialCloudState() {
+    async function loadInitialCloudGroups() {
       if (!isSupabaseConfigured) return;
 
       try {
         setCloudStatus('loading');
-        setCloudMessage('Checking Supabase for saved group data...');
-        const cloudData = await loadBillGroupFromCloud();
+        setCloudMessage('Loading saved bill sets from Supabase...');
+        const groups = await listBillGroupsFromCloud();
+
+        if (cancelled) return;
+
+        setCloudGroups(groups);
+
+        if (!groups.length) {
+          setCloudStatus('idle');
+          setCloudMessage('No saved bill sets exist yet. Create one as admin to save this data to Supabase.');
+          return;
+        }
+
+        const firstGroup = groups[0];
+        const cloudData = await loadBillGroupFromCloud(firstGroup.id);
 
         if (cancelled) return;
 
@@ -215,12 +238,11 @@ function App() {
           setSplitBetween(cloudData.state.members.map((member) => member.id));
           setSplitMode('equal');
           setSplitValues({});
+          setActiveGroupId(cloudData.id);
+          setActiveGroupName(cloudData.name);
           setCloudUpdatedAt(cloudData.updatedAt);
           setCloudStatus('success');
-          setCloudMessage('Loaded the latest data from Supabase.');
-        } else {
-          setCloudStatus('idle');
-          setCloudMessage('No cloud record exists yet. Click Save to cloud once to create it.');
+          setCloudMessage(`Loaded “${cloudData.name}” from Supabase.`);
         }
       } catch (loadError) {
         if (cancelled) return;
@@ -229,7 +251,7 @@ function App() {
       }
     }
 
-    loadInitialCloudState();
+    loadInitialCloudGroups();
 
     return () => {
       cancelled = true;
@@ -298,7 +320,10 @@ function App() {
     }));
   }, [expenseAmount, expenseDescription, expenseDate, paidBy, splitBetween, splitMode, splitValues]);
 
-  const applyLoadedState = (nextState: AppState) => {
+  const applyLoadedState = (
+    nextState: AppState,
+    cloudGroup?: { id: string; name: string; updatedAt: string | null },
+  ) => {
     setState(nextState);
     setPaidBy(nextState.members[0]?.id ?? '');
     setSplitBetween(nextState.members.map((member) => member.id));
@@ -308,7 +333,26 @@ function App() {
     setExpenseDescription('');
     setExpenseAmount('');
     setExpenseDate(new Date().toISOString().slice(0, 10));
+
+    if (cloudGroup) {
+      setActiveGroupId(cloudGroup.id);
+      setActiveGroupName(cloudGroup.name);
+      setCloudUpdatedAt(cloudGroup.updatedAt);
+    }
+
     setError('');
+  };
+
+  const refreshCloudGroupList = async () => {
+    if (!isSupabaseConfigured) {
+      setCloudStatus('error');
+      setCloudMessage('Add your Supabase environment variables before loading cloud bill sets.');
+      return [] as BillGroupSummary[];
+    }
+
+    const groups = await listBillGroupsFromCloud();
+    setCloudGroups(groups);
+    return groups;
   };
 
   const requireAdmin = (message = 'Only the admin can make changes in this app.') => {
@@ -348,28 +392,20 @@ function App() {
     setError('');
   };
 
-  const saveToCloud = async () => {
-    if (!requireAdmin('Only admin users can save changes to Supabase.')) return;
-    if (!isSupabaseConfigured) {
-      setCloudStatus('error');
-      setCloudMessage('Add your Supabase environment variables before saving to cloud.');
-      return;
-    }
-
+  const refreshGroupsFromCloud = async () => {
     try {
-      setCloudStatus('saving');
-      setCloudMessage('Saving the current group data to Supabase...');
-      const updatedAt = await saveBillGroupToCloud(state);
-      setCloudUpdatedAt(updatedAt);
+      setCloudStatus('loading');
+      setCloudMessage('Refreshing saved bill sets from Supabase...');
+      const groups = await refreshCloudGroupList();
       setCloudStatus('success');
-      setCloudMessage('Saved to Supabase.');
-    } catch (saveError) {
+      setCloudMessage(groups.length ? 'Bill set list refreshed.' : 'No saved bill sets found yet.');
+    } catch (loadError) {
       setCloudStatus('error');
-      setCloudMessage(getErrorMessage(saveError));
+      setCloudMessage(getErrorMessage(loadError));
     }
   };
 
-  const loadFromCloud = async () => {
+  const loadCloudGroup = async (groupId: string) => {
     if (!isSupabaseConfigured) {
       setCloudStatus('error');
       setCloudMessage('Add your Supabase environment variables before loading from cloud.');
@@ -378,22 +414,118 @@ function App() {
 
     try {
       setCloudStatus('loading');
-      setCloudMessage('Loading group data from Supabase...');
-      const cloudData = await loadBillGroupFromCloud();
+      const groupName = cloudGroups.find((group) => group.id === groupId)?.name ?? 'selected bill set';
+      setCloudMessage(`Loading “${groupName}” from Supabase...`);
+      const cloudData = await loadBillGroupFromCloud(groupId);
 
       if (!cloudData) {
         setCloudStatus('idle');
-        setCloudMessage('No cloud record exists yet. Save once to create it.');
+        setCloudMessage('That bill set was not found. Refresh the list and try again.');
         return;
       }
 
-      applyLoadedState(cloudData.state);
-      setCloudUpdatedAt(cloudData.updatedAt);
+      applyLoadedState(cloudData.state, {
+        id: cloudData.id,
+        name: cloudData.name,
+        updatedAt: cloudData.updatedAt,
+      });
       setCloudStatus('success');
-      setCloudMessage('Loaded from Supabase.');
+      setCloudMessage(`Loaded “${cloudData.name}” from Supabase.`);
     } catch (loadError) {
       setCloudStatus('error');
       setCloudMessage(getErrorMessage(loadError));
+    }
+  };
+
+  const createNewCloudGroup = async () => {
+    if (!requireAdmin('Only admin users can create new bill sets.')) return;
+    if (!isSupabaseConfigured) {
+      setCloudStatus('error');
+      setCloudMessage('Add your Supabase environment variables before saving to cloud.');
+      return;
+    }
+
+    const trimmedName = newGroupName.trim();
+    if (!trimmedName) {
+      setError('Add a name for the new bill set before saving it.');
+      return;
+    }
+
+    try {
+      setCloudStatus('saving');
+      setCloudMessage(`Creating “${trimmedName}” in Supabase...`);
+      const createdGroup = await createBillGroupInCloud(trimmedName, state);
+      applyLoadedState(createdGroup.state, {
+        id: createdGroup.id,
+        name: createdGroup.name,
+        updatedAt: createdGroup.updatedAt,
+      });
+      setNewGroupName('');
+      const groups = await refreshCloudGroupList();
+      setCloudStatus('success');
+      setCloudMessage(`Created “${createdGroup.name}”. You now have ${groups.length} saved bill set${groups.length === 1 ? '' : 's'}.`);
+    } catch (saveError) {
+      setCloudStatus('error');
+      setCloudMessage(getErrorMessage(saveError));
+    }
+  };
+
+  const saveToCloud = async () => {
+    if (!requireAdmin('Only admin users can save changes to Supabase.')) return;
+    if (!isSupabaseConfigured) {
+      setCloudStatus('error');
+      setCloudMessage('Add your Supabase environment variables before saving to cloud.');
+      return;
+    }
+
+    if (!activeGroupId) {
+      setError('Create a new bill set or select an existing one before saving changes.');
+      return;
+    }
+
+    try {
+      setCloudStatus('saving');
+      setCloudMessage(`Saving “${activeGroupName}” to Supabase...`);
+      const updatedAt = await saveBillGroupToCloud(activeGroupId, activeGroupName, state);
+      setCloudUpdatedAt(updatedAt);
+      await refreshCloudGroupList();
+      setCloudStatus('success');
+      setCloudMessage(`Saved “${activeGroupName}” to Supabase.`);
+    } catch (saveError) {
+      setCloudStatus('error');
+      setCloudMessage(getErrorMessage(saveError));
+    }
+  };
+
+  const deleteActiveCloudGroup = async () => {
+    if (!requireAdmin('Only admin users can delete saved bill sets.')) return;
+    if (!activeGroupId) {
+      setError('Select a saved bill set before deleting it.');
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete “${activeGroupName}” from Supabase? This cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+      setCloudStatus('saving');
+      setCloudMessage(`Deleting “${activeGroupName}” from Supabase...`);
+      await deleteBillGroupFromCloud(activeGroupId);
+      const groups = await refreshCloudGroupList();
+
+      if (groups.length) {
+        const nextGroup = groups[0];
+        await loadCloudGroup(nextGroup.id);
+      } else {
+        setActiveGroupId(null);
+        setActiveGroupName('Local unsaved bill set');
+        setCloudUpdatedAt(null);
+        setCloudStatus('success');
+        setCloudMessage('Deleted the bill set. No saved bill sets remain in Supabase.');
+      }
+    } catch (deleteError) {
+      setCloudStatus('error');
+      setCloudMessage(getErrorMessage(deleteError));
     }
   };
 
@@ -757,11 +889,11 @@ function App() {
           </div>
           <div>
             <p className="panel-kicker">Cloud storage</p>
-            <h2>{isSupabaseConfigured ? 'Supabase sync enabled' : 'Local browser storage only'}</h2>
+            <h2>{isSupabaseConfigured ? 'Supabase bill sets enabled' : 'Local browser storage only'}</h2>
             <p>{cloudMessage}</p>
             {isSupabaseConfigured ? (
               <small>
-                Group ID: <code>{supabaseGroupId}</code> · Last sync: {formatSyncTime(cloudUpdatedAt)}
+                Active bill set: <code>{activeGroupName}</code> · Last sync: {formatSyncTime(cloudUpdatedAt)}
               </small>
             ) : (
               <small>Add Supabase env variables to enable save/load from the cloud.</small>
@@ -769,14 +901,71 @@ function App() {
           </div>
         </div>
         <div className="sync-actions">
-          <button className="ghost-button" type="button" onClick={loadFromCloud} disabled={!isSupabaseConfigured || isCloudBusy}>
-            {cloudStatus === 'loading' ? <Loader2 size={16} className="spin" /> : <Download size={16} />}
-            Load from cloud
+          <button className="ghost-button" type="button" onClick={refreshGroupsFromCloud} disabled={!isSupabaseConfigured || isCloudBusy}>
+            {cloudStatus === 'loading' ? <Loader2 size={16} className="spin" /> : <RefreshCcw size={16} />}
+            Refresh list
           </button>
-          <button className="primary-button" type="button" onClick={saveToCloud} disabled={!isSupabaseConfigured || isCloudBusy || !canEdit}>
-            {cloudStatus === 'saving' ? <Loader2 size={16} className="spin" /> : <Upload size={16} />}
-            Save to cloud
+          <button className="primary-button" type="button" onClick={saveToCloud} disabled={!isSupabaseConfigured || isCloudBusy || !canEdit || !activeGroupId}>
+            {cloudStatus === 'saving' ? <Loader2 size={16} className="spin" /> : <Save size={16} />}
+            Save selected
           </button>
+        </div>
+      </section>
+
+      <section className="panel full-width-panel bill-set-panel">
+        <div className="panel-header">
+          <div>
+            <p className="panel-kicker">Saved bill sets</p>
+            <h2><FolderOpen size={20} /> Select an expense set to view</h2>
+          </div>
+          <span className="pill">{cloudGroups.length} saved</span>
+        </div>
+
+        {canEdit ? (
+          <div className="bill-set-create">
+            <input
+              value={newGroupName}
+              onChange={(event) => setNewGroupName(event.target.value)}
+              placeholder="New bill set name, e.g. April house bills"
+              aria-label="New bill set name"
+            />
+            <button className="primary-button" type="button" onClick={createNewCloudGroup} disabled={!isSupabaseConfigured || isCloudBusy}>
+              <Plus size={16} /> Save as new set
+            </button>
+            <button className="danger-button" type="button" onClick={deleteActiveCloudGroup} disabled={!isSupabaseConfigured || isCloudBusy || !activeGroupId}>
+              <Trash2 size={16} /> Delete selected
+            </button>
+          </div>
+        ) : (
+          <p className="read-only-note">Guests can open any saved bill set, but only admin users can create, save, or delete bill sets.</p>
+        )}
+
+        <div className="bill-set-list">
+          {cloudGroups.length ? (
+            cloudGroups.map((group) => (
+              <button
+                key={group.id}
+                type="button"
+                className={`bill-set-card ${activeGroupId === group.id ? 'active' : ''}`}
+                onClick={() => loadCloudGroup(group.id)}
+                disabled={isCloudBusy}
+              >
+                <div>
+                  <strong>{group.name}</strong>
+                  <span>
+                    {group.expenseCount} expense{group.expenseCount === 1 ? '' : 's'} · {group.memberCount} member{group.memberCount === 1 ? '' : 's'} · Updated {formatSyncTime(group.updatedAt)}
+                  </span>
+                </div>
+                <em>{formatMoney(group.totalSpent, group.currency)}</em>
+              </button>
+            ))
+          ) : (
+            <p className="empty-text">
+              {isSupabaseConfigured
+                ? 'No saved bill sets yet. Login as admin, enter a name, and click “Save as new set”.'
+                : 'Configure Supabase to list saved bill sets here.'}
+            </p>
+          )}
         </div>
       </section>
 
@@ -1096,7 +1285,6 @@ function App() {
           )}
         </div>
       </section>
-      <Analytics />
     </main>
   );
 }
