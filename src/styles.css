@@ -221,6 +221,104 @@ h1 {
   font-size: 1.8rem;
 }
 
+
+.sync-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.74);
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 18px 50px rgba(36, 48, 41, 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.sync-card.connected {
+  border-color: rgba(27, 111, 92, 0.22);
+}
+
+.sync-card.local-only {
+  border-color: rgba(215, 140, 48, 0.28);
+}
+
+.sync-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.sync-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+}
+
+.sync-card.local-only .sync-icon {
+  background: rgba(215, 140, 48, 0.18);
+  color: #8a5518;
+}
+
+.sync-card h2 {
+  margin-bottom: 6px;
+  font-size: 1.05rem;
+}
+
+.sync-card p {
+  margin-bottom: 6px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.sync-card small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.sync-card code {
+  padding: 2px 6px;
+  border-radius: 8px;
+  background: rgba(27, 111, 92, 0.08);
+  color: var(--primary-dark);
+  font-size: 0.8rem;
+}
+
+.sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.primary-button:disabled,
+.ghost-button:disabled,
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+}
+
+.spin {
+  animation: spin 0.85s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .error-banner {
   margin-bottom: 20px;
   padding: 14px 18px;
@@ -592,9 +690,25 @@ select {
   }
 
   .hero-card,
-  .panel {
+  .panel,
+  .sync-card {
     padding: 20px;
     border-radius: 24px;
+  }
+
+  .sync-card,
+  .sync-main,
+  .sync-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sync-actions {
+    justify-content: stretch;
+  }
+
+  .sync-actions button {
+    width: 100%;
   }
 
   h1 {

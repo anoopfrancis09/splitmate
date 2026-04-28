@@ -1,19 +1,26 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Analytics } from '@vercel/analytics/react';
 import {
   ArrowRight,
   BadgeDollarSign,
   CheckCircle2,
+  Cloud,
+  CloudOff,
+  Download,
   Home,
+  Loader2,
   Plus,
   ReceiptText,
   RefreshCcw,
   Trash2,
+  Upload,
   UsersRound,
   WalletCards,
 } from 'lucide-react';
 import type { AppState, Expense, Member, SplitMode } from './types';
+import { loadBillGroupFromCloud, saveBillGroupToCloud } from './cloudStore';
 import { currencyOptions, formatMoney } from './money';
+import { loadLocalState, saveLocalState } from './stateUtils';
+import { isSupabaseConfigured, supabaseGroupId } from './supabaseClient';
 import {
   calculateBalances,
   calculatePairwiseSettlements,
@@ -22,20 +29,26 @@ import {
   getMemberName,
 } from './settlements';
 
-const STORAGE_KEY = 'splitmate-bill-splitter-state-v1';
-
 const splitModeLabels: Record<SplitMode, string> = {
   equal: 'Equal split',
   shares: 'Share split',
   percentages: 'Percentage split',
 };
 
-const defaultState: AppState = {
-  members: [],
-  expenses: [],
-  currency: 'AUD',
-  simplifyDebts: true,
-};
+type CloudStatus = 'idle' | 'loading' | 'saving' | 'success' | 'error';
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Something went wrong.';
+}
+
+function formatSyncTime(value: string | null): string {
+  if (!value) return 'Not synced yet';
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
+}
 
 function toInputNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
@@ -115,34 +128,8 @@ function createSampleState(currency = 'AUD'): AppState {
   };
 }
 
-function normalizeExpense(expense: Expense): Expense {
-  return {
-    ...expense,
-    splitMode: expense.splitMode ?? 'equal',
-    splitValues: expense.splitValues ?? undefined,
-  };
-}
-
-function loadState(): AppState {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (!saved) return defaultState;
-
-    const parsed = JSON.parse(saved) as AppState;
-
-    return {
-      ...defaultState,
-      ...parsed,
-      members: Array.isArray(parsed.members) ? parsed.members : defaultState.members,
-      expenses: Array.isArray(parsed.expenses) ? parsed.expenses.map(normalizeExpense) : defaultState.expenses,
-    };
-  } catch {
-    return defaultState;
-  }
-}
-
 function App() {
-  const [state, setState] = useState<AppState>(() => loadState());
+  const [state, setState] = useState<AppState>(() => loadLocalState());
   const [memberName, setMemberName] = useState('');
   const [expenseDescription, setExpenseDescription] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
@@ -152,10 +139,59 @@ function App() {
   const [splitValues, setSplitValues] = useState<Record<string, string>>({});
   const [expenseDate, setExpenseDate] = useState(new Date().toISOString().slice(0, 10));
   const [error, setError] = useState('');
+  const [cloudStatus, setCloudStatus] = useState<CloudStatus>('idle');
+  const [cloudMessage, setCloudMessage] = useState(
+    isSupabaseConfigured
+      ? 'Cloud sync is ready. Load from Supabase or save your current data.'
+      : 'Cloud sync is not configured yet. The app will keep using this browser only.',
+  );
+  const [cloudUpdatedAt, setCloudUpdatedAt] = useState<string | null>(null);
+
+  const isCloudBusy = cloudStatus === 'loading' || cloudStatus === 'saving';
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    saveLocalState(state);
   }, [state]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadInitialCloudState() {
+      if (!isSupabaseConfigured) return;
+
+      try {
+        setCloudStatus('loading');
+        setCloudMessage('Checking Supabase for saved group data...');
+        const cloudData = await loadBillGroupFromCloud();
+
+        if (cancelled) return;
+
+        if (cloudData) {
+          setState(cloudData.state);
+          setPaidBy(cloudData.state.members[0]?.id ?? '');
+          setSplitBetween(cloudData.state.members.map((member) => member.id));
+          setSplitMode('equal');
+          setSplitValues({});
+          setCloudUpdatedAt(cloudData.updatedAt);
+          setCloudStatus('success');
+          setCloudMessage('Loaded the latest data from Supabase.');
+        } else {
+          setCloudStatus('idle');
+          setCloudMessage('No cloud record exists yet. Click Save to cloud once to create it.');
+        }
+      } catch (loadError) {
+        if (cancelled) return;
+        setCloudStatus('error');
+        setCloudMessage(getErrorMessage(loadError));
+      }
+    }
+
+    loadInitialCloudState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!state.members.some((member) => member.id === paidBy)) {
@@ -218,6 +254,67 @@ function App() {
       amount: owedAmounts[memberId] ?? 0,
     }));
   }, [expenseAmount, expenseDescription, expenseDate, paidBy, splitBetween, splitMode, splitValues]);
+
+  const applyLoadedState = (nextState: AppState) => {
+    setState(nextState);
+    setPaidBy(nextState.members[0]?.id ?? '');
+    setSplitBetween(nextState.members.map((member) => member.id));
+    setSplitMode('equal');
+    setSplitValues({});
+    setMemberName('');
+    setExpenseDescription('');
+    setExpenseAmount('');
+    setExpenseDate(new Date().toISOString().slice(0, 10));
+    setError('');
+  };
+
+  const saveToCloud = async () => {
+    if (!isSupabaseConfigured) {
+      setCloudStatus('error');
+      setCloudMessage('Add your Supabase environment variables before saving to cloud.');
+      return;
+    }
+
+    try {
+      setCloudStatus('saving');
+      setCloudMessage('Saving the current group data to Supabase...');
+      const updatedAt = await saveBillGroupToCloud(state);
+      setCloudUpdatedAt(updatedAt);
+      setCloudStatus('success');
+      setCloudMessage('Saved to Supabase.');
+    } catch (saveError) {
+      setCloudStatus('error');
+      setCloudMessage(getErrorMessage(saveError));
+    }
+  };
+
+  const loadFromCloud = async () => {
+    if (!isSupabaseConfigured) {
+      setCloudStatus('error');
+      setCloudMessage('Add your Supabase environment variables before loading from cloud.');
+      return;
+    }
+
+    try {
+      setCloudStatus('loading');
+      setCloudMessage('Loading group data from Supabase...');
+      const cloudData = await loadBillGroupFromCloud();
+
+      if (!cloudData) {
+        setCloudStatus('idle');
+        setCloudMessage('No cloud record exists yet. Save once to create it.');
+        return;
+      }
+
+      applyLoadedState(cloudData.state);
+      setCloudUpdatedAt(cloudData.updatedAt);
+      setCloudStatus('success');
+      setCloudMessage('Loaded from Supabase.');
+    } catch (loadError) {
+      setCloudStatus('error');
+      setCloudMessage(getErrorMessage(loadError));
+    }
+  };
 
   const addMember = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -391,7 +488,7 @@ function App() {
   const resetDemo = () => {
     const sampleState = createSampleState(state.currency);
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sampleState));
+    saveLocalState(sampleState);
     setState(sampleState);
     setPaidBy(sampleState.members[0].id);
     setSplitBetween(sampleState.members.map((member) => member.id));
@@ -402,7 +499,7 @@ function App() {
 
   const clearAll = () => {
     const emptyState: AppState = { members: [], expenses: [], currency: state.currency, simplifyDebts: true };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(emptyState));
+    saveLocalState(emptyState);
     setState(emptyState);
     setMemberName('');
     setExpenseDescription('');
@@ -485,6 +582,36 @@ function App() {
             <span>Expenses</span>
             <strong>{state.expenses.length}</strong>
           </div>
+        </div>
+      </section>
+
+      <section className={`sync-card ${isSupabaseConfigured ? 'connected' : 'local-only'}`}>
+        <div className="sync-main">
+          <div className="sync-icon" aria-hidden="true">
+            {isSupabaseConfigured ? <Cloud size={22} /> : <CloudOff size={22} />}
+          </div>
+          <div>
+            <p className="panel-kicker">Cloud storage</p>
+            <h2>{isSupabaseConfigured ? 'Supabase sync enabled' : 'Local browser storage only'}</h2>
+            <p>{cloudMessage}</p>
+            {isSupabaseConfigured ? (
+              <small>
+                Group ID: <code>{supabaseGroupId}</code> · Last sync: {formatSyncTime(cloudUpdatedAt)}
+              </small>
+            ) : (
+              <small>Add Supabase env variables to enable save/load from the cloud.</small>
+            )}
+          </div>
+        </div>
+        <div className="sync-actions">
+          <button className="ghost-button" type="button" onClick={loadFromCloud} disabled={!isSupabaseConfigured || isCloudBusy}>
+            {cloudStatus === 'loading' ? <Loader2 size={16} className="spin" /> : <Download size={16} />}
+            Load from cloud
+          </button>
+          <button className="primary-button" type="button" onClick={saveToCloud} disabled={!isSupabaseConfigured || isCloudBusy}>
+            {cloudStatus === 'saving' ? <Loader2 size={16} className="spin" /> : <Upload size={16} />}
+            Save to cloud
+          </button>
         </div>
       </section>
 
@@ -778,7 +905,6 @@ function App() {
           )}
         </div>
       </section>
-      <Analytics />
     </main>
   );
 }
