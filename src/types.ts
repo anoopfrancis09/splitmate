@@ -5,12 +5,16 @@ export type Member = {
 
 export type CurrencyCode = 'AUD' | 'USD' | 'EUR' | 'GBP' | 'INR' | 'CAD' | 'NZD' | string;
 
+export type SplitMode = 'equal' | 'shares' | 'percentages';
+
 export type Expense = {
   id: string;
   description: string;
   amount: number;
   paidBy: string;
   splitBetween: string[];
+  splitMode?: SplitMode;
+  splitValues?: Record<string, number>;
   date: string;
   notes?: string;
 };

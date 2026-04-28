@@ -1,21 +1,22 @@
 # SplitMate - React Bill Splitter
 
-A simple, elegant Splitwise-style bill splitting app built with React + Vite.
+A simple Splitwise-style bill splitting app built with React, TypeScript and Vite.
 
 ## Features
 
 - Add and remove group members
-- Add shared expenses in AUD by default
-- Choose who paid the bill
-- Choose which members the bill should be split between
-- Equal split calculation
-- Consolidated member balances
-- Settlement summary showing who owes whom
-- Optional simplified debts to reduce the total number of repayments
-- Currency selector ready for future multi-currency scaling
-- Local storage persistence
-- Sample data reset and clear-all actions
-- Responsive UI with a consistent theme
+- Add expenses in AUD by default, with a currency selector for future scaling
+- Choose who paid for each bill
+- Split expenses using:
+  - Equal split
+  - Custom shares, such as 2 shares vs 1 share
+  - Custom percentages, with validation that the total is 100%
+- Preview each member's share before adding the expense
+- Show consolidated balances
+- Toggle simplified debt settlement to reduce the number of repayments
+- View expense history
+- Persist data in local storage
+- Load sample data or clear all data
 
 ## Run locally
 
@@ -24,30 +25,19 @@ npm install
 npm run dev
 ```
 
-Then open the local URL printed by Vite, usually:
-
-```bash
-http://localhost:5173
-```
-
-## Build for production
+## Build
 
 ```bash
 npm run build
-npm run preview
 ```
 
-## Main files
+## Deploy to Vercel
 
-```text
-src/App.tsx             Main application UI and state handling
-src/settlements.ts      Balance and debt simplification logic
-src/money.ts            Currency formatting helpers
-src/styles.css          Full app styling/theme
+Use these settings when importing the GitHub repo into Vercel:
+
+```txt
+Framework Preset: Vite
+Build Command: npm run build
+Output Directory: dist
+Install Command: npm install
 ```
-
-## Debt simplification logic
-
-When `Simplify debts` is enabled, the app calculates each member's net balance, then matches debtors with creditors so the group can settle up with fewer payments.
-
-When it is disabled, the app shows pairwise consolidated repayments based on the original expense relationships.

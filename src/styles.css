@@ -612,3 +612,131 @@ select {
     justify-self: start;
   }
 }
+
+.split-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.mode-card {
+  display: grid;
+  gap: 4px;
+  min-height: 78px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--ink);
+  text-align: left;
+}
+
+.mode-card strong {
+  font-size: 0.9rem;
+}
+
+.mode-card span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.mode-card.active {
+  border-color: rgba(27, 111, 92, 0.42);
+  background: var(--primary-soft);
+  box-shadow: 0 0 0 3px rgba(27, 111, 92, 0.1);
+}
+
+.split-value-list {
+  display: grid;
+  gap: 8px;
+}
+
+.split-value-row {
+  display: grid !important;
+  grid-template-columns: 1fr minmax(150px, 190px) !important;
+  align-items: center;
+  gap: 10px !important;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--ink) !important;
+}
+
+.split-value-row > span {
+  font-weight: 800;
+}
+
+.split-input-wrapper {
+  position: relative;
+}
+
+.split-input-wrapper input {
+  padding-right: 64px;
+}
+
+.split-input-wrapper em {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-style: normal;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.split-total {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(27, 111, 92, 0.08);
+  color: var(--primary-dark);
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.split-total.warning {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.split-preview {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px dashed rgba(27, 111, 92, 0.28);
+  border-radius: var(--radius-lg);
+  background: rgba(223, 242, 237, 0.42);
+}
+
+.split-preview > span {
+  color: var(--primary-dark);
+  font-size: 0.8rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.split-preview > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.split-preview span,
+.split-preview strong {
+  font-size: 0.9rem;
+}
+
+@media (max-width: 640px) {
+  .split-mode-grid,
+  .split-value-row {
+    grid-template-columns: 1fr !important;
+  }
+}

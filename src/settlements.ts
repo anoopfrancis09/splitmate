@@ -5,17 +5,62 @@ function emptyBalances(members: Member[]): Record<string, number> {
   return Object.fromEntries(members.map((member) => [member.id, 0]));
 }
 
+function distributeAmount(amount: number, memberIds: string[], weights: number[]): Record<string, number> {
+  const positiveWeights = weights.map((weight) => (Number.isFinite(weight) && weight > 0 ? weight : 0));
+  const totalWeight = positiveWeights.reduce((total, weight) => total + weight, 0);
+
+  if (!memberIds.length || totalWeight <= 0) return {};
+
+  const shares: Record<string, number> = {};
+  let allocated = 0;
+
+  memberIds.forEach((memberId, index) => {
+    const isLast = index === memberIds.length - 1;
+    const share = isLast
+      ? roundMoney(amount - allocated)
+      : roundMoney((amount * positiveWeights[index]) / totalWeight);
+
+    shares[memberId] = share;
+    allocated = roundMoney(allocated + share);
+  });
+
+  return shares;
+}
+
+export function getExpenseOwedAmounts(expense: Expense): Record<string, number> {
+  const splitBetween = expense.splitBetween.filter(Boolean);
+
+  if (!expense.amount || expense.amount <= 0 || splitBetween.length === 0) return {};
+
+  if (expense.splitMode === 'shares' || expense.splitMode === 'percentages') {
+    const customWeights = splitBetween.map((memberId) => Number(expense.splitValues?.[memberId] ?? 0));
+    const hasCustomWeights = customWeights.some((weight) => Number.isFinite(weight) && weight > 0);
+
+    if (hasCustomWeights) {
+      return distributeAmount(expense.amount, splitBetween, customWeights);
+    }
+  }
+
+  return distributeAmount(
+    expense.amount,
+    splitBetween,
+    splitBetween.map(() => 1),
+  );
+}
+
 export function calculateBalances(members: Member[], expenses: Expense[]): Balance[] {
   const balances = emptyBalances(members);
 
   expenses.forEach((expense) => {
-    if (!expense.amount || expense.amount <= 0 || expense.splitBetween.length === 0) return;
+    const owedAmounts = getExpenseOwedAmounts(expense);
+    const owedEntries = Object.entries(owedAmounts);
 
-    const splitAmount = expense.amount / expense.splitBetween.length;
+    if (!expense.amount || expense.amount <= 0 || owedEntries.length === 0) return;
+
     balances[expense.paidBy] = roundMoney((balances[expense.paidBy] ?? 0) + expense.amount);
 
-    expense.splitBetween.forEach((memberId) => {
-      balances[memberId] = roundMoney((balances[memberId] ?? 0) - splitAmount);
+    owedEntries.forEach(([memberId, owedAmount]) => {
+      balances[memberId] = roundMoney((balances[memberId] ?? 0) - owedAmount);
     });
   });
 
@@ -25,29 +70,26 @@ export function calculateBalances(members: Member[], expenses: Expense[]): Balan
   }));
 }
 
-
-//calculations
-
 export function calculatePairwiseSettlements(expenses: Expense[]): Settlement[] {
   const pairMap = new Map<string, number>();
 
   expenses.forEach((expense) => {
-    if (!expense.amount || expense.amount <= 0 || expense.splitBetween.length === 0) return;
+    const owedAmounts = getExpenseOwedAmounts(expense);
 
-    const splitAmount = expense.amount / expense.splitBetween.length;
+    if (!expense.amount || expense.amount <= 0 || !Object.keys(owedAmounts).length) return;
 
-    expense.splitBetween.forEach((debtorId) => {
-      if (debtorId === expense.paidBy) return;
+    Object.entries(owedAmounts).forEach(([debtorId, owedAmount]) => {
+      if (debtorId === expense.paidBy || owedAmount <= 0) return;
 
       const forwardKey = `${debtorId}->${expense.paidBy}`;
       const reverseKey = `${expense.paidBy}->${debtorId}`;
       const reverseAmount = pairMap.get(reverseKey) ?? 0;
 
-      if (reverseAmount > splitAmount) {
-        pairMap.set(reverseKey, roundMoney(reverseAmount - splitAmount));
-      } else if (reverseAmount < splitAmount) {
+      if (reverseAmount > owedAmount) {
+        pairMap.set(reverseKey, roundMoney(reverseAmount - owedAmount));
+      } else if (reverseAmount < owedAmount) {
         pairMap.delete(reverseKey);
-        pairMap.set(forwardKey, roundMoney((pairMap.get(forwardKey) ?? 0) + splitAmount - reverseAmount));
+        pairMap.set(forwardKey, roundMoney((pairMap.get(forwardKey) ?? 0) + owedAmount - reverseAmount));
       } else {
         pairMap.delete(reverseKey);
       }
