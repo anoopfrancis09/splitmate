@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import {
   ArrowRight,
   BadgeDollarSign,
@@ -777,6 +778,7 @@ function App() {
           )}
         </div>
       </section>
+      <Analytics />
     </main>
   );
 }
