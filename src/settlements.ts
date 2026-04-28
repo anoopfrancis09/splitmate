@@ -25,6 +25,9 @@ export function calculateBalances(members: Member[], expenses: Expense[]): Balan
   }));
 }
 
+
+//calculations
+
 export function calculatePairwiseSettlements(expenses: Expense[]): Settlement[] {
   const pairMap = new Map<string, number>();
 
