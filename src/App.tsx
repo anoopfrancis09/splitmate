@@ -6,11 +6,16 @@ import {
   Cloud,
   CloudOff,
   Download,
+  Eye,
   Home,
   Loader2,
+  LogIn,
+  LogOut,
+  LockKeyhole,
   Plus,
   ReceiptText,
   RefreshCcw,
+  ShieldCheck,
   Trash2,
   Upload,
   UsersRound,
@@ -36,6 +41,31 @@ const splitModeLabels: Record<SplitMode, string> = {
 };
 
 type CloudStatus = 'idle' | 'loading' | 'saving' | 'success' | 'error';
+type UserRole = 'admin' | 'guest';
+
+const AUTH_STORAGE_KEY = 'splitmate-auth-role';
+const ADMIN_PASSWORD = 'admin7535';
+
+function getStoredRole(): UserRole | null {
+  try {
+    const storedRole = window.localStorage.getItem(AUTH_STORAGE_KEY);
+    return storedRole === 'admin' || storedRole === 'guest' ? storedRole : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredRole(role: UserRole | null) {
+  try {
+    if (role) {
+      window.localStorage.setItem(AUTH_STORAGE_KEY, role);
+    } else {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage failures. The user can still use the current session.
+  }
+}
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong.';
@@ -146,12 +176,24 @@ function App() {
       : 'Cloud sync is not configured yet. The app will keep using this browser only.',
   );
   const [cloudUpdatedAt, setCloudUpdatedAt] = useState<string | null>(null);
+  const [role, setRole] = useState<UserRole | null>(() => getStoredRole());
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [viewSimplifyDebts, setViewSimplifyDebts] = useState(state.simplifyDebts);
 
+  const isAdmin = role === 'admin';
+  const isGuest = role === 'guest';
+  const canEdit = isAdmin;
   const isCloudBusy = cloudStatus === 'loading' || cloudStatus === 'saving';
+  const shouldSimplifyDebts = isAdmin ? state.simplifyDebts : viewSimplifyDebts;
 
   useEffect(() => {
     saveLocalState(state);
   }, [state]);
+
+  useEffect(() => {
+    setViewSimplifyDebts(state.simplifyDebts);
+  }, [state.simplifyDebts]);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,8 +249,8 @@ function App() {
   const balances = useMemo(() => calculateBalances(state.members, state.expenses), [state.members, state.expenses]);
 
   const settlements = useMemo(() => {
-    return state.simplifyDebts ? calculateSimplifiedSettlements(balances) : calculatePairwiseSettlements(state.expenses);
-  }, [balances, state.expenses, state.simplifyDebts]);
+    return shouldSimplifyDebts ? calculateSimplifiedSettlements(balances) : calculatePairwiseSettlements(state.expenses);
+  }, [balances, state.expenses, shouldSimplifyDebts]);
 
   const totalSpent = useMemo(
     () => state.expenses.reduce((total, expense) => total + expense.amount, 0),
@@ -268,7 +310,45 @@ function App() {
     setError('');
   };
 
+  const requireAdmin = (message = 'Only the admin can make changes in this app.') => {
+    if (isAdmin) return true;
+    setError(message);
+    return false;
+  };
+
+  const handleAdminLogin = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (loginPassword === ADMIN_PASSWORD) {
+      setRole('admin');
+      saveStoredRole('admin');
+      setLoginPassword('');
+      setLoginError('');
+      setError('');
+      return;
+    }
+
+    setLoginError('Incorrect password. Continue as guest for read-only access, or try again.');
+  };
+
+  const continueAsGuest = () => {
+    setRole('guest');
+    saveStoredRole('guest');
+    setLoginPassword('');
+    setLoginError('');
+    setError('');
+  };
+
+  const logout = () => {
+    setRole(null);
+    saveStoredRole(null);
+    setLoginPassword('');
+    setLoginError('');
+    setError('');
+  };
+
   const saveToCloud = async () => {
+    if (!requireAdmin('Only admin users can save changes to Supabase.')) return;
     if (!isSupabaseConfigured) {
       setCloudStatus('error');
       setCloudMessage('Add your Supabase environment variables before saving to cloud.');
@@ -318,6 +398,7 @@ function App() {
 
   const addMember = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!requireAdmin('Only admin users can add group members.')) return;
     const trimmedName = memberName.trim();
 
     if (!trimmedName) return;
@@ -339,6 +420,7 @@ function App() {
   };
 
   const removeMember = (memberId: string) => {
+    if (!requireAdmin('Only admin users can remove group members.')) return;
     const hasExpenses = state.expenses.some(
       (expense) => expense.paidBy === memberId || expense.splitBetween.includes(memberId),
     );
@@ -360,6 +442,7 @@ function App() {
 
   const addExpense = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!requireAdmin('Only admin users can add expenses.')) return;
 
     const amount = Number(expenseAmount);
     const trimmedDescription = expenseDescription.trim();
@@ -438,10 +521,12 @@ function App() {
   };
 
   const deleteExpense = (expenseId: string) => {
+    if (!requireAdmin('Only admin users can delete expenses.')) return;
     setState((current) => ({ ...current, expenses: current.expenses.filter((expense) => expense.id !== expenseId) }));
   };
 
   const handleSplitModeChange = (mode: SplitMode) => {
+    if (!requireAdmin('Only admin users can change expense split details.')) return;
     setSplitMode(mode);
     setSplitValues((current) => {
       if (mode === 'equal') return {};
@@ -451,12 +536,14 @@ function App() {
   };
 
   const selectAllSplitMembers = () => {
+    if (!requireAdmin('Only admin users can change expense split details.')) return;
     const allMemberIds = state.members.map((member) => member.id);
     setSplitBetween(allMemberIds);
     setSplitValues(getDefaultSplitValues(allMemberIds, splitMode));
   };
 
   const toggleSplitMember = (memberId: string) => {
+    if (!requireAdmin('Only admin users can change expense split details.')) return;
     setSplitBetween((current) => {
       const next = current.includes(memberId) ? current.filter((id) => id !== memberId) : [...current, memberId];
 
@@ -478,14 +565,17 @@ function App() {
   };
 
   const updateSplitValue = (memberId: string, value: string) => {
+    if (!requireAdmin('Only admin users can change expense split details.')) return;
     setSplitValues((current) => ({ ...current, [memberId]: value }));
   };
 
   const resetCustomSplit = () => {
+    if (!requireAdmin('Only admin users can change expense split details.')) return;
     setSplitValues(getDefaultSplitValues(splitBetween, splitMode));
   };
 
   const resetDemo = () => {
+    if (!requireAdmin('Only admin users can load sample data.')) return;
     const sampleState = createSampleState(state.currency);
 
     saveLocalState(sampleState);
@@ -498,6 +588,7 @@ function App() {
   };
 
   const clearAll = () => {
+    if (!requireAdmin('Only admin users can clear all data.')) return;
     const emptyState: AppState = { members: [], expenses: [], currency: state.currency, simplifyDebts: true };
     saveLocalState(emptyState);
     setState(emptyState);
@@ -528,6 +619,58 @@ function App() {
     return `${splitModeLabels[mode]}: ${splitDetails}`;
   };
 
+  if (!role) {
+    return (
+      <main className="login-shell">
+        <section className="login-card">
+          <div className="login-brand">
+            <div className="brand-mark">
+              <WalletCards size={28} />
+            </div>
+            <div>
+              <span className="brand-name">SplitMate</span>
+              <span className="brand-subtitle">Group bill splitter</span>
+            </div>
+          </div>
+
+          <div className="login-heading">
+            <p className="eyebrow">Secure entry</p>
+            <h1>Login to manage expenses or continue as a guest.</h1>
+            <p>Admin users can add, delete, save, and manage bills. Guests can only view the group, balances, and settlements.</p>
+          </div>
+
+          <form className="login-form" onSubmit={handleAdminLogin}>
+            <label>
+              Admin password
+              <div className="password-input">
+                <LockKeyhole size={18} />
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  placeholder="Enter admin password"
+                  autoComplete="current-password"
+                />
+              </div>
+            </label>
+            {loginError ? <div className="error-banner compact">{loginError}</div> : null}
+            <button type="submit" className="primary-button full-width-button">
+              <LogIn size={18} /> Login as admin
+            </button>
+          </form>
+
+          <button type="button" className="ghost-button full-width-button guest-login-button" onClick={continueAsGuest}>
+            <Eye size={18} /> Continue as guest
+          </button>
+
+          <p className="auth-note">
+            This is a lightweight client-side login for personal/admin convenience. For sensitive data, use Supabase Auth and server-side/RLS permissions.
+          </p>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <nav className="topbar">
@@ -544,11 +687,19 @@ function App() {
           </div>
         </div>
         <div className="topbar-actions">
+          <div className={`role-badge ${isAdmin ? 'admin' : 'guest'}`}>
+            {isAdmin ? <ShieldCheck size={16} /> : <Eye size={16} />}
+            {isAdmin ? 'Admin' : 'Guest view'}
+          </div>
           <label className="currency-select">
             <span>Currency</span>
             <select
               value={state.currency}
-              onChange={(event) => setState((current) => ({ ...current, currency: event.target.value }))}
+              disabled={!canEdit}
+              title={canEdit ? 'Change currency' : 'Guests cannot change the currency'}
+              onChange={(event) => {
+                if (canEdit) setState((current) => ({ ...current, currency: event.target.value }));
+              }}
             >
               {currencyOptions.map((currency) => (
                 <option key={currency} value={currency}>
@@ -557,6 +708,9 @@ function App() {
               ))}
             </select>
           </label>
+          <button className="ghost-button logout-button" type="button" onClick={logout}>
+            <LogOut size={16} /> Logout
+          </button>
         </div>
       </nav>
 
@@ -585,6 +739,16 @@ function App() {
         </div>
       </section>
 
+      {isGuest ? (
+        <section className="access-banner">
+          <LockKeyhole size={20} />
+          <div>
+            <strong>Guest read-only mode</strong>
+            <span>You can view balances, settlements, and history, but only the admin can add, delete, clear, or save data.</span>
+          </div>
+        </section>
+      ) : null}
+
       <section className={`sync-card ${isSupabaseConfigured ? 'connected' : 'local-only'}`}>
         <div className="sync-main">
           <div className="sync-icon" aria-hidden="true">
@@ -608,7 +772,7 @@ function App() {
             {cloudStatus === 'loading' ? <Loader2 size={16} className="spin" /> : <Download size={16} />}
             Load from cloud
           </button>
-          <button className="primary-button" type="button" onClick={saveToCloud} disabled={!isSupabaseConfigured || isCloudBusy}>
+          <button className="primary-button" type="button" onClick={saveToCloud} disabled={!isSupabaseConfigured || isCloudBusy || !canEdit}>
             {cloudStatus === 'saving' ? <Loader2 size={16} className="spin" /> : <Upload size={16} />}
             Save to cloud
           </button>
@@ -628,26 +792,32 @@ function App() {
               <span className="pill">{state.members.length} people</span>
             </div>
 
-            <form className="inline-form" onSubmit={addMember}>
-              <input
-                value={memberName}
-                onChange={(event) => setMemberName(event.target.value)}
-                placeholder="Enter member name"
-                aria-label="Member name"
-              />
-              <button type="submit" className="primary-button">
-                <Plus size={17} /> Add
-              </button>
-            </form>
+            {canEdit ? (
+              <form className="inline-form" onSubmit={addMember}>
+                <input
+                  value={memberName}
+                  onChange={(event) => setMemberName(event.target.value)}
+                  placeholder="Enter member name"
+                  aria-label="Member name"
+                />
+                <button type="submit" className="primary-button">
+                  <Plus size={17} /> Add
+                </button>
+              </form>
+            ) : (
+              <p className="read-only-note">Guests can view members, but only admin users can add or remove them.</p>
+            )}
 
             <div className="member-list">
               {state.members.length ? (
                 state.members.map((member) => (
                   <div key={member.id} className="member-chip">
                     <span>{member.name}</span>
-                    <button onClick={() => removeMember(member.id)} aria-label={`Remove ${member.name}`}>
-                      <Trash2 size={15} />
-                    </button>
+                    {canEdit ? (
+                      <button onClick={() => removeMember(member.id)} aria-label={`Remove ${member.name}`}>
+                        <Trash2 size={15} />
+                      </button>
+                    ) : null}
                   </div>
                 ))
               ) : (
@@ -665,7 +835,8 @@ function App() {
               <span className="pill">{splitModeLabels[splitMode]}</span>
             </div>
 
-            <form className="expense-form" onSubmit={addExpense}>
+            {canEdit ? (
+              <form className="expense-form" onSubmit={addExpense}>
               <label>
                 Description
                 <input
@@ -804,6 +975,13 @@ function App() {
                 <BadgeDollarSign size={18} /> Add bill
               </button>
             </form>
+            ) : (
+              <div className="read-only-card">
+                <LockKeyhole size={28} />
+                <h3>Expense editing is locked for guests</h3>
+                <p>Login as admin to add bills, choose split shares or percentages, and save updates to Supabase.</p>
+              </div>
+            )}
           </section>
         </div>
 
@@ -817,8 +995,14 @@ function App() {
               <label className="toggle-row">
                 <input
                   type="checkbox"
-                  checked={state.simplifyDebts}
-                  onChange={(event) => setState((current) => ({ ...current, simplifyDebts: event.target.checked }))}
+                  checked={shouldSimplifyDebts}
+                  onChange={(event) => {
+                    if (isAdmin) {
+                      setState((current) => ({ ...current, simplifyDebts: event.target.checked }));
+                    } else {
+                      setViewSimplifyDebts(event.target.checked);
+                    }
+                  }}
                 />
                 <span>Simplify debts</span>
               </label>
@@ -872,14 +1056,18 @@ function App() {
             <p className="panel-kicker">History</p>
             <h2>Expense activity</h2>
           </div>
-          <div className="button-row">
-            <button className="ghost-button" onClick={resetDemo}>
-              <RefreshCcw size={16} /> Load sample
-            </button>
-            <button className="danger-button" onClick={clearAll}>
-              <Trash2 size={16} /> Clear all
-            </button>
-          </div>
+          {canEdit ? (
+            <div className="button-row">
+              <button className="ghost-button" onClick={resetDemo}>
+                <RefreshCcw size={16} /> Load sample
+              </button>
+              <button className="danger-button" onClick={clearAll}>
+                <Trash2 size={16} /> Clear all
+              </button>
+            </div>
+          ) : (
+            <span className="pill muted-pill">Read-only</span>
+          )}
         </div>
 
         <div className="expense-list">
@@ -894,9 +1082,11 @@ function App() {
                 </div>
                 <div className="expense-card-actions">
                   <strong>{formatMoney(expense.amount, state.currency)}</strong>
-                  <button onClick={() => deleteExpense(expense.id)} aria-label={`Delete ${expense.description}`}>
-                    <Trash2 size={16} />
-                  </button>
+                  {canEdit ? (
+                    <button onClick={() => deleteExpense(expense.id)} aria-label={`Delete ${expense.description}`}>
+                      <Trash2 size={16} />
+                    </button>
+                  ) : null}
                 </div>
               </article>
             ))

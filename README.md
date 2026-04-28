@@ -18,6 +18,8 @@ A simple Splitwise-style bill splitting app built with React, TypeScript, Vite a
 - Persist data in browser local storage by default
 - Save/load the whole app state as one JSON object in Supabase
 - Load sample data or clear all data
+- Login page with Admin and Guest access
+- Guest users can view data but cannot add, remove, clear, or save changes
 
 ## Run locally
 
@@ -31,6 +33,19 @@ npm run dev
 ```bash
 npm run build
 ```
+
+## Login access
+
+When the app opens, users can either:
+
+- Login as **Admin** using `admin7535`
+- Continue as **Guest**
+
+Admin users can add members, add expenses, delete expenses, remove members, change currency, clear data, load sample data, and save changes to Supabase.
+
+Guest users can load and view cloud data, balances, settlements, and history. Guests cannot add, delete, clear, or save changes. They can toggle the settlement view locally without saving it.
+
+> Important: this is a lightweight client-side login for personal use. It is not a replacement for real backend authentication. For real private/admin security, use Supabase Auth and RLS policies tied to logged-in users.
 
 ## Supabase setup
 
@@ -109,4 +124,4 @@ Then redeploy.
 
 ## Security note
 
-This version is intentionally simple and uses one configured Supabase row. The anon key is safe to put in the browser only when Row Level Security is enabled and policies are limited. For proper private multi-group or multi-user support, add Supabase Auth later and tie each group row to `auth.uid()`.
+This version is intentionally simple and uses one configured Supabase row. The login page prevents guests from editing through the UI, but it is still client-side access control. The current Supabase setup allows the configured row to be read and updated using the anon key so the frontend can save data. For proper private/admin security, add Supabase Auth or route writes through a server/API using a service-role key, then lock down update policies with RLS.
