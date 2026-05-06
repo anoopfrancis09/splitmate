@@ -1,11 +1,11 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import type { User } from '@supabase/supabase-js';
 import {
   ArrowRight,
   BadgeDollarSign,
   CheckCircle2,
   Cloud,
   CloudOff,
-  Eye,
   FolderOpen,
   Home,
   Loader2,
@@ -21,7 +21,7 @@ import {
   UsersRound,
   WalletCards,
 } from 'lucide-react';
-import type { AppState, Expense, Member, SplitMode } from './types';
+import type { AppState, Expense, Member, Settlement, SplitMode } from './types';
 import {
   createBillGroupInCloud,
   deleteBillGroupFromCloud,
@@ -31,8 +31,9 @@ import {
   type BillGroupSummary,
 } from './cloudStore';
 import { currencyOptions, formatMoney } from './money';
-import { loadLocalState, saveLocalState } from './stateUtils';
-import { isSupabaseConfigured } from './supabaseClient';
+import { defaultState } from './stateUtils';
+import { isSupabaseConfigured, supabase } from './supabaseClient';
+import { loginWithUsername, logoutCurrentUser, normalizeUsername, registerWithUsername, type AuthMode } from './auth';
 import {
   calculateBalances,
   calculatePairwiseSettlements,
@@ -48,30 +49,11 @@ const splitModeLabels: Record<SplitMode, string> = {
 };
 
 type CloudStatus = 'idle' | 'loading' | 'saving' | 'success' | 'error';
-type UserRole = 'admin' | 'guest';
 
-const AUTH_STORAGE_KEY = 'splitmate-auth-role';
-const ADMIN_PASSWORD = 'admin7535';
-
-function getStoredRole(): UserRole | null {
-  try {
-    const storedRole = window.localStorage.getItem(AUTH_STORAGE_KEY);
-    return storedRole === 'admin' || storedRole === 'guest' ? storedRole : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveStoredRole(role: UserRole | null) {
-  try {
-    if (role) {
-      window.localStorage.setItem(AUTH_STORAGE_KEY, role);
-    } else {
-      window.localStorage.removeItem(AUTH_STORAGE_KEY);
-    }
-  } catch {
-    // Ignore storage failures. The user can still use the current session.
-  }
+function getUsernameFromUser(user: User | null) {
+  if (!user) return '';
+  const metadataUsername = typeof user.user_metadata?.username === 'string' ? user.user_metadata.username : '';
+  return metadataUsername || user.email?.replace('@splitmate.local', '') || 'User';
 }
 
 function getErrorMessage(error: unknown): string {
@@ -122,6 +104,7 @@ function createSampleState(currency = 'AUD'): AppState {
 
   return {
     members: sampleMembers,
+    settledPayments: [],
     expenses: [
       {
         id: crypto.randomUUID(),
@@ -166,7 +149,7 @@ function createSampleState(currency = 'AUD'): AppState {
 }
 
 function App() {
-  const [state, setState] = useState<AppState>(() => loadLocalState());
+  const [state, setState] = useState<AppState>(defaultState);
   const [memberName, setMemberName] = useState('');
   const [expenseDescription, setExpenseDescription] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
@@ -180,37 +163,83 @@ function App() {
   const [cloudMessage, setCloudMessage] = useState(
     isSupabaseConfigured
       ? 'Cloud storage is ready. Select a saved bill set or create a new one.'
-      : 'Cloud sync is not configured yet. The app will keep using this browser only.',
+      : 'Cloud sync is not configured yet. Add Supabase environment variables to use this app.',
   );
   const [cloudUpdatedAt, setCloudUpdatedAt] = useState<string | null>(null);
   const [cloudGroups, setCloudGroups] = useState<BillGroupSummary[]>([]);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
-  const [activeGroupName, setActiveGroupName] = useState('Local unsaved bill set');
+  const [activeGroupName, setActiveGroupName] = useState('No bill set selected');
   const [newGroupName, setNewGroupName] = useState('');
-  const [role, setRole] = useState<UserRole | null>(() => getStoredRole());
-  const [loginPassword, setLoginPassword] = useState('');
-  const [loginError, setLoginError] = useState('');
-  const [viewSimplifyDebts, setViewSimplifyDebts] = useState(state.simplifyDebts);
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<AuthMode>('login');
+  const [authUsername, setAuthUsername] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
 
-  const isAdmin = role === 'admin';
-  const isGuest = role === 'guest';
-  const canEdit = isAdmin;
+  const canEdit = Boolean(user);
   const isCloudBusy = cloudStatus === 'loading' || cloudStatus === 'saving';
-  const shouldSimplifyDebts = isAdmin ? state.simplifyDebts : viewSimplifyDebts;
+  const shouldSimplifyDebts = state.simplifyDebts;
+
 
   useEffect(() => {
-    saveLocalState(state);
-  }, [state]);
+    let mounted = true;
 
-  useEffect(() => {
-    setViewSimplifyDebts(state.simplifyDebts);
-  }, [state.simplifyDebts]);
+    async function initialiseSession() {
+      if (!isSupabaseConfigured || !supabase) {
+        setAuthLoading(false);
+        return;
+      }
+
+      const { data } = await supabase.auth.getSession();
+      if (mounted) {
+        setUser(data.session?.user ?? null);
+        setAuthLoading(false);
+      }
+    }
+
+    initialiseSession();
+
+    if (!isSupabaseConfigured || !supabase) {
+      return () => {
+        mounted = false;
+      };
+    }
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+      if (!session?.user) {
+        applyLoadedState(defaultState);
+        setCloudGroups([]);
+        setActiveGroupId(null);
+        setActiveGroupName('No bill set selected');
+        setCloudUpdatedAt(null);
+        setCloudStatus('idle');
+        setCloudMessage(
+          isSupabaseConfigured
+            ? 'Login to load your saved bill sets from Supabase.'
+            : 'Cloud sync is not configured yet. Add Supabase environment variables to use this app.',
+        );
+      }
+    });
+
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadInitialCloudGroups() {
-      if (!isSupabaseConfigured) return;
+      if (!isSupabaseConfigured || !user) return;
+
+      applyLoadedState(defaultState);
+      setActiveGroupId(null);
+      setActiveGroupName('No bill set selected');
+      setCloudUpdatedAt(null);
 
       try {
         setCloudStatus('loading');
@@ -222,8 +251,12 @@ function App() {
         setCloudGroups(groups);
 
         if (!groups.length) {
+          applyLoadedState(defaultState);
+          setActiveGroupId(null);
+          setActiveGroupName('No bill set selected');
+          setCloudUpdatedAt(null);
           setCloudStatus('idle');
-          setCloudMessage('No saved bill sets exist yet. Create one as admin to save this data to Supabase.');
+          setCloudMessage('No saved bill sets exist yet. Create one to save your data to Supabase.');
           return;
         }
 
@@ -256,7 +289,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     if (!state.members.some((member) => member.id === paidBy)) {
@@ -269,11 +302,16 @@ function App() {
     });
   }, [paidBy, state.members]);
 
-  const balances = useMemo(() => calculateBalances(state.members, state.expenses), [state.members, state.expenses]);
+  const balances = useMemo(
+    () => calculateBalances(state.members, state.expenses, state.settledPayments),
+    [state.members, state.expenses, state.settledPayments],
+  );
 
   const settlements = useMemo(() => {
-    return shouldSimplifyDebts ? calculateSimplifiedSettlements(balances) : calculatePairwiseSettlements(state.expenses);
-  }, [balances, state.expenses, shouldSimplifyDebts]);
+    return shouldSimplifyDebts
+      ? calculateSimplifiedSettlements(balances)
+      : calculatePairwiseSettlements(state.expenses, state.settledPayments);
+  }, [balances, state.expenses, state.settledPayments, shouldSimplifyDebts]);
 
   const totalSpent = useMemo(
     () => state.expenses.reduce((total, expense) => total + expense.amount, 0),
@@ -355,41 +393,43 @@ function App() {
     return groups;
   };
 
-  const requireAdmin = (message = 'Only the admin can make changes in this app.') => {
-    if (isAdmin) return true;
+  const requireAdmin = (message = 'Please login before making changes in this app.') => {
+    if (user) return true;
     setError(message);
     return false;
   };
 
-  const handleAdminLogin = (event: FormEvent<HTMLFormElement>) => {
+  const handleAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setAuthError('');
 
-    if (loginPassword === ADMIN_PASSWORD) {
-      setRole('admin');
-      saveStoredRole('admin');
-      setLoginPassword('');
-      setLoginError('');
+    try {
+      setAuthLoading(true);
+      if (authMode === 'register') {
+        await registerWithUsername(authUsername, authPassword);
+      } else {
+        await loginWithUsername(authUsername, authPassword);
+      }
+      setAuthUsername('');
+      setAuthPassword('');
       setError('');
-      return;
+    } catch (authSubmitError) {
+      setAuthError(getErrorMessage(authSubmitError));
+    } finally {
+      setAuthLoading(false);
     }
-
-    setLoginError('Incorrect password. Continue as guest for read-only access, or try again.');
   };
 
-  const continueAsGuest = () => {
-    setRole('guest');
-    saveStoredRole('guest');
-    setLoginPassword('');
-    setLoginError('');
-    setError('');
-  };
-
-  const logout = () => {
-    setRole(null);
-    saveStoredRole(null);
-    setLoginPassword('');
-    setLoginError('');
-    setError('');
+  const logout = async () => {
+    try {
+      await logoutCurrentUser();
+      setAuthUsername('');
+      setAuthPassword('');
+      setAuthError('');
+      setError('');
+    } catch (logoutError) {
+      setError(getErrorMessage(logoutError));
+    }
   };
 
   const refreshGroupsFromCloud = async () => {
@@ -438,7 +478,7 @@ function App() {
   };
 
   const createNewCloudGroup = async () => {
-    if (!requireAdmin('Only admin users can create new bill sets.')) return;
+    if (!requireAdmin('Please login to create new bill sets.')) return;
     if (!isSupabaseConfigured) {
       setCloudStatus('error');
       setCloudMessage('Add your Supabase environment variables before saving to cloud.');
@@ -454,7 +494,11 @@ function App() {
     try {
       setCloudStatus('saving');
       setCloudMessage(`Creating “${trimmedName}” in Supabase...`);
-      const createdGroup = await createBillGroupInCloud(trimmedName, state);
+      if (!user) {
+        setError('Please login before creating a bill set.');
+        return;
+      }
+      const createdGroup = await createBillGroupInCloud(trimmedName, state, user.id);
       applyLoadedState(createdGroup.state, {
         id: createdGroup.id,
         name: createdGroup.name,
@@ -471,7 +515,7 @@ function App() {
   };
 
   const saveToCloud = async () => {
-    if (!requireAdmin('Only admin users can save changes to Supabase.')) return;
+    if (!requireAdmin('Please login to save changes to Supabase.')) return;
     if (!isSupabaseConfigured) {
       setCloudStatus('error');
       setCloudMessage('Add your Supabase environment variables before saving to cloud.');
@@ -498,7 +542,7 @@ function App() {
   };
 
   const deleteActiveCloudGroup = async () => {
-    if (!requireAdmin('Only admin users can delete saved bill sets.')) return;
+    if (!requireAdmin('Please login to delete saved bill sets.')) return;
     if (!activeGroupId) {
       setError('Select a saved bill set before deleting it.');
       return;
@@ -517,8 +561,9 @@ function App() {
         const nextGroup = groups[0];
         await loadCloudGroup(nextGroup.id);
       } else {
+        applyLoadedState(defaultState);
         setActiveGroupId(null);
-        setActiveGroupName('Local unsaved bill set');
+        setActiveGroupName('No bill set selected');
         setCloudUpdatedAt(null);
         setCloudStatus('success');
         setCloudMessage('Deleted the bill set. No saved bill sets remain in Supabase.');
@@ -531,7 +576,7 @@ function App() {
 
   const addMember = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!requireAdmin('Only admin users can add group members.')) return;
+    if (!requireAdmin('Please login to add group members.')) return;
     const trimmedName = memberName.trim();
 
     if (!trimmedName) return;
@@ -553,13 +598,16 @@ function App() {
   };
 
   const removeMember = (memberId: string) => {
-    if (!requireAdmin('Only admin users can remove group members.')) return;
+    if (!requireAdmin('Please login to remove group members.')) return;
     const hasExpenses = state.expenses.some(
       (expense) => expense.paidBy === memberId || expense.splitBetween.includes(memberId),
     );
+    const hasSettledPayments = state.settledPayments.some(
+      (payment) => payment.from === memberId || payment.to === memberId,
+    );
 
-    if (hasExpenses) {
-      setError('This member is attached to existing expenses. Delete those expenses before removing the member.');
+    if (hasExpenses || hasSettledPayments) {
+      setError('This member is attached to existing expenses or settled payments. Delete those records before removing the member.');
       return;
     }
 
@@ -575,7 +623,7 @@ function App() {
 
   const addExpense = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!requireAdmin('Only admin users can add expenses.')) return;
+    if (!requireAdmin('Please login to add expenses.')) return;
 
     const amount = Number(expenseAmount);
     const trimmedDescription = expenseDescription.trim();
@@ -654,12 +702,12 @@ function App() {
   };
 
   const deleteExpense = (expenseId: string) => {
-    if (!requireAdmin('Only admin users can delete expenses.')) return;
+    if (!requireAdmin('Please login to delete expenses.')) return;
     setState((current) => ({ ...current, expenses: current.expenses.filter((expense) => expense.id !== expenseId) }));
   };
 
   const handleSplitModeChange = (mode: SplitMode) => {
-    if (!requireAdmin('Only admin users can change expense split details.')) return;
+    if (!requireAdmin('Please login to change expense split details.')) return;
     setSplitMode(mode);
     setSplitValues((current) => {
       if (mode === 'equal') return {};
@@ -669,14 +717,14 @@ function App() {
   };
 
   const selectAllSplitMembers = () => {
-    if (!requireAdmin('Only admin users can change expense split details.')) return;
+    if (!requireAdmin('Please login to change expense split details.')) return;
     const allMemberIds = state.members.map((member) => member.id);
     setSplitBetween(allMemberIds);
     setSplitValues(getDefaultSplitValues(allMemberIds, splitMode));
   };
 
   const toggleSplitMember = (memberId: string) => {
-    if (!requireAdmin('Only admin users can change expense split details.')) return;
+    if (!requireAdmin('Please login to change expense split details.')) return;
     setSplitBetween((current) => {
       const next = current.includes(memberId) ? current.filter((id) => id !== memberId) : [...current, memberId];
 
@@ -698,20 +746,19 @@ function App() {
   };
 
   const updateSplitValue = (memberId: string, value: string) => {
-    if (!requireAdmin('Only admin users can change expense split details.')) return;
+    if (!requireAdmin('Please login to change expense split details.')) return;
     setSplitValues((current) => ({ ...current, [memberId]: value }));
   };
 
   const resetCustomSplit = () => {
-    if (!requireAdmin('Only admin users can change expense split details.')) return;
+    if (!requireAdmin('Please login to change expense split details.')) return;
     setSplitValues(getDefaultSplitValues(splitBetween, splitMode));
   };
 
   const resetDemo = () => {
-    if (!requireAdmin('Only admin users can load sample data.')) return;
+    if (!requireAdmin('Please login to load sample data.')) return;
     const sampleState = createSampleState(state.currency);
 
-    saveLocalState(sampleState);
     setState(sampleState);
     setPaidBy(sampleState.members[0].id);
     setSplitBetween(sampleState.members.map((member) => member.id));
@@ -721,9 +768,8 @@ function App() {
   };
 
   const clearAll = () => {
-    if (!requireAdmin('Only admin users can clear all data.')) return;
-    const emptyState: AppState = { members: [], expenses: [], currency: state.currency, simplifyDebts: true };
-    saveLocalState(emptyState);
+    if (!requireAdmin('Please login to clear all data.')) return;
+    const emptyState: AppState = { members: [], expenses: [], settledPayments: [], currency: state.currency, simplifyDebts: true };
     setState(emptyState);
     setMemberName('');
     setExpenseDescription('');
@@ -733,6 +779,84 @@ function App() {
     setSplitMode('equal');
     setSplitValues({});
     setError('');
+  };
+
+  const markSettlementAsSettled = async (settlement: Settlement) => {
+    if (!requireAdmin('Please login to mark settlements as paid.')) return;
+
+    if (!activeGroupId) {
+      setError('Select or create a saved bill set before marking a settlement as paid, so the change can be saved to Supabase.');
+      return;
+    }
+
+    if (!isSupabaseConfigured) {
+      setCloudStatus('error');
+      setCloudMessage('Add your Supabase environment variables before saving settled payments.');
+      return;
+    }
+
+    const settledPayment = {
+      id: crypto.randomUUID(),
+      from: settlement.from,
+      to: settlement.to,
+      amount: settlement.amount,
+      date: new Date().toISOString().slice(0, 10),
+      settledAt: new Date().toISOString(),
+    };
+
+    const nextState: AppState = {
+      ...state,
+      settledPayments: [settledPayment, ...state.settledPayments],
+    };
+
+    try {
+      setState(nextState);
+      setCloudStatus('saving');
+      setCloudMessage(`Marking payment as settled and saving “${activeGroupName}” to Supabase...`);
+      const updatedAt = await saveBillGroupToCloud(activeGroupId, activeGroupName, nextState);
+      setCloudUpdatedAt(updatedAt);
+      await refreshCloudGroupList();
+      setCloudStatus('success');
+      setCloudMessage(`Marked ${getMemberName(state.members, settlement.from)} → ${getMemberName(state.members, settlement.to)} as settled and saved to Supabase.`);
+      setError('');
+    } catch (saveError) {
+      setState(state);
+      setCloudStatus('error');
+      setCloudMessage(getErrorMessage(saveError));
+      setError('Could not save the settled payment. The local change was rolled back.');
+    }
+  };
+
+  const deleteSettledPayment = async (paymentId: string) => {
+    if (!requireAdmin('Please login to delete settled payment records.')) return;
+
+    const nextState: AppState = {
+      ...state,
+      settledPayments: state.settledPayments.filter((payment) => payment.id !== paymentId),
+    };
+
+    if (!activeGroupId || !isSupabaseConfigured) {
+      setState(nextState);
+      setError('Settled payment removed locally. Select a cloud bill set and save to persist the change.');
+      return;
+    }
+
+    try {
+      setState(nextState);
+      setCloudStatus('saving');
+      setCloudMessage(`Updating settled payment history for “${activeGroupName}”...`);
+      const updatedAt = await saveBillGroupToCloud(activeGroupId, activeGroupName, nextState);
+      setCloudUpdatedAt(updatedAt);
+      await refreshCloudGroupList();
+      setCloudStatus('success');
+      setCloudMessage('Removed the settled payment record and saved the update to Supabase.');
+      setError('');
+    } catch (saveError) {
+      setState(state);
+      setCloudStatus('error');
+      setCloudMessage(getErrorMessage(saveError));
+      setError('Could not remove the settled payment record. The local change was rolled back.');
+    }
   };
 
   const getExpenseSplitLabel = (expense: Expense) => {
@@ -752,7 +876,29 @@ function App() {
     return `${splitModeLabels[mode]}: ${splitDetails}`;
   };
 
-  if (!role) {
+  if (authLoading && !user) {
+    return (
+      <main className="login-shell">
+        <section className="login-card">
+          <div className="login-brand">
+            <div className="brand-mark">
+              <WalletCards size={28} />
+            </div>
+            <div>
+              <span className="brand-name">SplitMate</span>
+              <span className="brand-subtitle">Group bill splitter</span>
+            </div>
+          </div>
+          <div className="settled-state">
+            <Loader2 size={32} className="spin" />
+            <p>Checking your session...</p>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (!user) {
     return (
       <main className="login-shell">
         <section className="login-card">
@@ -767,37 +913,62 @@ function App() {
           </div>
 
           <div className="login-heading">
-            <p className="eyebrow">Secure entry</p>
-            <h1>Login to manage expenses or continue as a guest.</h1>
-            <p>Admin users can add, delete, save, and manage bills. Guests can only view the group, balances, and settlements.</p>
+            <p className="eyebrow">Supabase account</p>
+            <h1>{authMode === 'login' ? 'Login to your bills.' : 'Create your bill-splitter account.'}</h1>
+            <p>Each account only sees the bill sets created under that username. Passwords are handled by Supabase Auth, not stored manually in the app.</p>
           </div>
 
-          <form className="login-form" onSubmit={handleAdminLogin}>
+          {!isSupabaseConfigured ? (
+            <div className="error-banner compact">Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY before using account login.</div>
+          ) : null}
+
+          <form className="login-form" onSubmit={handleAuthSubmit}>
             <label>
-              Admin password
+              Username
+              <div className="password-input">
+                <LogIn size={18} />
+                <input
+                  type="text"
+                  value={authUsername}
+                  onChange={(event) => setAuthUsername(normalizeUsername(event.target.value))}
+                  placeholder="e.g. anoop"
+                  autoComplete="username"
+                />
+              </div>
+            </label>
+            <label>
+              Password
               <div className="password-input">
                 <LockKeyhole size={18} />
                 <input
                   type="password"
-                  value={loginPassword}
-                  onChange={(event) => setLoginPassword(event.target.value)}
-                  placeholder="Enter admin password"
-                  autoComplete="current-password"
+                  value={authPassword}
+                  onChange={(event) => setAuthPassword(event.target.value)}
+                  placeholder={authMode === 'login' ? 'Enter your password' : 'Create a password'}
+                  autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
                 />
               </div>
             </label>
-            {loginError ? <div className="error-banner compact">{loginError}</div> : null}
-            <button type="submit" className="primary-button full-width-button">
-              <LogIn size={18} /> Login as admin
+            {authError ? <div className="error-banner compact">{authError}</div> : null}
+            <button type="submit" className="primary-button full-width-button" disabled={authLoading || !isSupabaseConfigured}>
+              {authLoading ? <Loader2 size={18} className="spin" /> : <LogIn size={18} />}
+              {authMode === 'login' ? 'Login' : 'Register'}
             </button>
           </form>
 
-          <button type="button" className="ghost-button full-width-button guest-login-button" onClick={continueAsGuest}>
-            <Eye size={18} /> Continue as guest
+          <button
+            type="button"
+            className="ghost-button full-width-button guest-login-button"
+            onClick={() => {
+              setAuthMode((current) => (current === 'login' ? 'register' : 'login'));
+              setAuthError('');
+            }}
+          >
+            {authMode === 'login' ? 'New user? Register here' : 'Already registered? Login'}
           </button>
 
           <p className="auth-note">
-            This is a lightweight client-side login for personal/admin convenience. For sensitive data, use Supabase Auth and server-side/RLS permissions.
+            This uses Supabase Auth sessions. Your rows are protected by Row Level Security, so logged-in users only load their own bill sets.
           </p>
         </section>
       </main>
@@ -820,9 +991,9 @@ function App() {
           </div>
         </div>
         <div className="topbar-actions">
-          <div className={`role-badge ${isAdmin ? 'admin' : 'guest'}`}>
-            {isAdmin ? <ShieldCheck size={16} /> : <Eye size={16} />}
-            {isAdmin ? 'Admin' : 'Guest view'}
+          <div className={`role-badge admin`}>
+            <ShieldCheck size={16} />
+            {getUsernameFromUser(user)}
           </div>
           <label className="currency-select">
             <span>Currency</span>
@@ -872,24 +1043,14 @@ function App() {
         </div>
       </section>
 
-      {isGuest ? (
-        <section className="access-banner">
-          <LockKeyhole size={20} />
-          <div>
-            <strong>Guest read-only mode</strong>
-            <span>You can view balances, settlements, and history, but only the admin can add, delete, clear, or save data.</span>
-          </div>
-        </section>
-      ) : null}
-
-      <section className={`sync-card ${isSupabaseConfigured ? 'connected' : 'local-only'}`}>
+            <section className={`sync-card ${isSupabaseConfigured ? 'connected' : 'local-only'}`}>
         <div className="sync-main">
           <div className="sync-icon" aria-hidden="true">
             {isSupabaseConfigured ? <Cloud size={22} /> : <CloudOff size={22} />}
           </div>
           <div>
             <p className="panel-kicker">Cloud storage</p>
-            <h2>{isSupabaseConfigured ? 'Supabase bill sets enabled' : 'Local browser storage only'}</h2>
+            <h2>{isSupabaseConfigured ? 'Supabase account storage enabled' : 'Supabase storage not configured'}</h2>
             <p>{cloudMessage}</p>
             {isSupabaseConfigured ? (
               <small>
@@ -937,7 +1098,7 @@ function App() {
             </button>
           </div>
         ) : (
-          <p className="read-only-note">Guests can open any saved bill set, but only admin users can create, save, or delete bill sets.</p>
+          <p className="read-only-note">Login is required to create, save, or delete bill sets.</p>
         )}
 
         <div className="bill-set-list">
@@ -962,7 +1123,7 @@ function App() {
           ) : (
             <p className="empty-text">
               {isSupabaseConfigured
-                ? 'No saved bill sets yet. Login as admin, enter a name, and click “Save as new set”.'
+                ? 'No saved bill sets yet. Enter a name and click “Save as new set”.'
                 : 'Configure Supabase to list saved bill sets here.'}
             </p>
           )}
@@ -995,7 +1156,7 @@ function App() {
                 </button>
               </form>
             ) : (
-              <p className="read-only-note">Guests can view members, but only admin users can add or remove them.</p>
+              <p className="read-only-note">Login is required to add or remove members.</p>
             )}
 
             <div className="member-list">
@@ -1168,8 +1329,8 @@ function App() {
             ) : (
               <div className="read-only-card">
                 <LockKeyhole size={28} />
-                <h3>Expense editing is locked for guests</h3>
-                <p>Login as admin to add bills, choose split shares or percentages, and save updates to Supabase.</p>
+                <h3>Expense editing is locked</h3>
+                <p>Login to add bills, choose split shares or percentages, and save updates to Supabase.</p>
               </div>
             )}
           </section>
@@ -1187,11 +1348,7 @@ function App() {
                   type="checkbox"
                   checked={shouldSimplifyDebts}
                   onChange={(event) => {
-                    if (isAdmin) {
-                      setState((current) => ({ ...current, simplifyDebts: event.target.checked }));
-                    } else {
-                      setViewSimplifyDebts(event.target.checked);
-                    }
+                    setState((current) => ({ ...current, simplifyDebts: event.target.checked }));
                   }}
                 />
                 <span>Simplify debts</span>
@@ -1202,10 +1359,25 @@ function App() {
               {settlements.length ? (
                 settlements.map((settlement, index) => (
                   <div key={`${settlement.from}-${settlement.to}-${index}`} className="settlement-card">
-                    <span>{getMemberName(state.members, settlement.from)}</span>
-                    <ArrowRight size={17} />
-                    <span>{getMemberName(state.members, settlement.to)}</span>
-                    <strong>{formatMoney(settlement.amount, state.currency)}</strong>
+                    <div className="settlement-flow">
+                      <span>{getMemberName(state.members, settlement.from)}</span>
+                      <ArrowRight size={17} />
+                      <span>{getMemberName(state.members, settlement.to)}</span>
+                    </div>
+                    <div className="settlement-actions">
+                      <strong>{formatMoney(settlement.amount, state.currency)}</strong>
+                      {canEdit ? (
+                        <button
+                          type="button"
+                          className="primary-button mini-button"
+                          onClick={() => markSettlementAsSettled(settlement)}
+                          disabled={!activeGroupId || !isSupabaseConfigured || isCloudBusy}
+                          title={!activeGroupId ? 'Select a saved bill set first' : 'Mark this amount as paid'}
+                        >
+                          <CheckCircle2 size={15} /> Settled
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 ))
               ) : (
@@ -1243,6 +1415,41 @@ function App() {
       <section className="panel full-width-panel">
         <div className="panel-header">
           <div>
+            <p className="panel-kicker">Paid off</p>
+            <h2><CheckCircle2 size={20} /> Settled payments</h2>
+          </div>
+          <span className="pill">{state.settledPayments.length} settled</span>
+        </div>
+
+        <div className="settled-payment-list">
+          {state.settledPayments.length ? (
+            state.settledPayments.map((payment) => (
+              <article key={payment.id} className="settled-payment-card">
+                <div>
+                  <strong>
+                    {getMemberName(state.members, payment.from)} paid {getMemberName(state.members, payment.to)}
+                  </strong>
+                  <span>Settled on {payment.date}</span>
+                </div>
+                <div className="expense-card-actions">
+                  <strong>{formatMoney(payment.amount, state.currency)}</strong>
+                  {canEdit ? (
+                    <button type="button" onClick={() => deleteSettledPayment(payment.id)} aria-label="Delete settled payment record">
+                      <Trash2 size={16} />
+                    </button>
+                  ) : null}
+                </div>
+              </article>
+            ))
+          ) : (
+            <p className="empty-text">No payments have been marked as settled yet.</p>
+          )}
+        </div>
+      </section>
+
+      <section className="panel full-width-panel">
+        <div className="panel-header">
+          <div>
             <p className="panel-kicker">History</p>
             <h2>Expense activity</h2>
           </div>
@@ -1256,7 +1463,7 @@ function App() {
               </button>
             </div>
           ) : (
-            <span className="pill muted-pill">Read-only</span>
+            <span className="pill muted-pill">Signed in</span>
           )}
         </div>
 

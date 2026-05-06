@@ -4,6 +4,7 @@ import { isSupabaseConfigured, supabase } from './supabaseClient';
 
 type BillGroupRow = {
   id: string;
+  user_id?: string | null;
   name: string | null;
   currency: string | null;
   data: unknown;
@@ -88,13 +89,14 @@ export async function loadBillGroupFromCloud(groupId: string): Promise<CloudLoad
   };
 }
 
-export async function createBillGroupInCloud(name: string, state: AppState): Promise<CloudLoadResult> {
+export async function createBillGroupInCloud(name: string, state: AppState, userId: string): Promise<CloudLoadResult> {
   assertSupabaseReady();
 
   const now = new Date().toISOString();
   const { data, error } = await supabase!
     .from('bill_groups')
     .insert({
+      user_id: userId,
       name,
       currency: state.currency,
       data: state,

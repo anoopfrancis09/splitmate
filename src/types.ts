@@ -25,6 +25,15 @@ export type Settlement = {
   amount: number;
 };
 
+export type SettledPayment = {
+  id: string;
+  from: string;
+  to: string;
+  amount: number;
+  date: string;
+  settledAt: string;
+};
+
 export type Balance = {
   memberId: string;
   amount: number;
@@ -33,6 +42,7 @@ export type Balance = {
 export type AppState = {
   members: Member[];
   expenses: Expense[];
+  settledPayments: SettledPayment[];
   currency: CurrencyCode;
   simplifyDebts: boolean;
 };

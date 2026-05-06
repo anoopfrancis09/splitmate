@@ -1,10 +1,10 @@
-import type { AppState, Expense } from './types';
+import type { AppState, Expense, SettledPayment } from './types';
 
-export const STORAGE_KEY = 'splitmate-bill-splitter-state-v1';
 
 export const defaultState: AppState = {
   members: [],
   expenses: [],
+  settledPayments: [],
   currency: 'AUD',
   simplifyDebts: true,
 };
@@ -14,6 +14,15 @@ export function normalizeExpense(expense: Expense): Expense {
     ...expense,
     splitMode: expense.splitMode ?? 'equal',
     splitValues: expense.splitValues ?? undefined,
+  };
+}
+
+export function normalizeSettledPayment(payment: SettledPayment): SettledPayment {
+  return {
+    ...payment,
+    amount: Number(payment.amount) || 0,
+    date: payment.date || new Date().toISOString().slice(0, 10),
+    settledAt: payment.settledAt || new Date().toISOString(),
   };
 }
 
@@ -27,21 +36,10 @@ export function normalizeState(value: unknown): AppState {
     ...parsed,
     members: Array.isArray(parsed.members) ? parsed.members : defaultState.members,
     expenses: Array.isArray(parsed.expenses) ? parsed.expenses.map(normalizeExpense) : defaultState.expenses,
+    settledPayments: Array.isArray(parsed.settledPayments)
+      ? parsed.settledPayments.map(normalizeSettledPayment)
+      : defaultState.settledPayments,
     currency: parsed.currency || defaultState.currency,
     simplifyDebts: typeof parsed.simplifyDebts === 'boolean' ? parsed.simplifyDebts : defaultState.simplifyDebts,
   };
-}
-
-export function loadLocalState(): AppState {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (!saved) return defaultState;
-    return normalizeState(JSON.parse(saved));
-  } catch {
-    return defaultState;
-  }
-}
-
-export function saveLocalState(state: AppState) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }

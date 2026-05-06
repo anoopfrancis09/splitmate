@@ -1160,3 +1160,71 @@ select {
     align-self: flex-start;
   }
 }
+
+.settlement-flow,
+.settlement-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settlement-flow {
+  min-width: 0;
+}
+
+.settlement-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.settled-payment-list {
+  display: grid;
+  gap: 12px;
+}
+
+.settled-payment-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid rgba(27, 111, 92, 0.18);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.settled-payment-card strong,
+.settled-payment-card span {
+  display: block;
+}
+
+.settled-payment-card span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 640px) {
+  .settlement-flow,
+  .settlement-actions,
+  .settled-payment-card {
+    align-items: flex-start;
+  }
+
+  .settlement-flow,
+  .settlement-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .settled-payment-card {
+    flex-direction: column;
+  }
+}
+
+.settlement-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+}

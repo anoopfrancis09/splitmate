@@ -1,4 +1,4 @@
-import type { Balance, Expense, Member, Settlement } from './types';
+import type { Balance, Expense, Member, Settlement, SettledPayment } from './types';
 import { roundMoney } from './money';
 
 function emptyBalances(members: Member[]): Record<string, number> {
@@ -48,7 +48,16 @@ export function getExpenseOwedAmounts(expense: Expense): Record<string, number> 
   );
 }
 
-export function calculateBalances(members: Member[], expenses: Expense[]): Balance[] {
+function applySettledPaymentsToBalances(balances: Record<string, number>, settledPayments: SettledPayment[]) {
+  settledPayments.forEach((payment) => {
+    if (!payment.from || !payment.to || !Number.isFinite(payment.amount) || payment.amount <= 0) return;
+
+    balances[payment.from] = roundMoney((balances[payment.from] ?? 0) + payment.amount);
+    balances[payment.to] = roundMoney((balances[payment.to] ?? 0) - payment.amount);
+  });
+}
+
+export function calculateBalances(members: Member[], expenses: Expense[], settledPayments: SettledPayment[] = []): Balance[] {
   const balances = emptyBalances(members);
 
   expenses.forEach((expense) => {
@@ -64,13 +73,39 @@ export function calculateBalances(members: Member[], expenses: Expense[]): Balan
     });
   });
 
+  applySettledPaymentsToBalances(balances, settledPayments);
+
   return members.map((member) => ({
     memberId: member.id,
     amount: roundMoney(balances[member.id] ?? 0),
   }));
 }
 
-export function calculatePairwiseSettlements(expenses: Expense[]): Settlement[] {
+function reducePairDebt(pairMap: Map<string, number>, from: string, to: string, amount: number) {
+  if (!from || !to || from === to || !Number.isFinite(amount) || amount <= 0) return;
+
+  const forwardKey = `${from}->${to}`;
+  const reverseKey = `${to}->${from}`;
+  const forwardAmount = pairMap.get(forwardKey) ?? 0;
+
+  if (forwardAmount > amount) {
+    pairMap.set(forwardKey, roundMoney(forwardAmount - amount));
+    return;
+  }
+
+  if (forwardAmount === amount) {
+    pairMap.delete(forwardKey);
+    return;
+  }
+
+  pairMap.delete(forwardKey);
+  const remainder = roundMoney(amount - forwardAmount);
+  if (remainder > 0.009) {
+    pairMap.set(reverseKey, roundMoney((pairMap.get(reverseKey) ?? 0) + remainder));
+  }
+}
+
+export function calculatePairwiseSettlements(expenses: Expense[], settledPayments: SettledPayment[] = []): Settlement[] {
   const pairMap = new Map<string, number>();
 
   expenses.forEach((expense) => {
@@ -94,6 +129,10 @@ export function calculatePairwiseSettlements(expenses: Expense[]): Settlement[] 
         pairMap.delete(reverseKey);
       }
     });
+  });
+
+  settledPayments.forEach((payment) => {
+    reducePairDebt(pairMap, payment.from, payment.to, payment.amount);
   });
 
   return Array.from(pairMap.entries())
