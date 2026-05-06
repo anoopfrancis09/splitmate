@@ -991,8 +991,8 @@ function App() {
         </div>
         <div className="topbar-actions">
           <div className={`role-badge admin`}>
-            <ShieldCheck size={16} />
-            {getUsernameFromUser(user)}
+            {/* <ShieldCheck size={16} /> */}
+            {getUsernameFromUser(user).slice(0, 2).toUpperCase()}
           </div>
           <label className="currency-select">
             <span>Currency</span>
@@ -1042,7 +1042,7 @@ function App() {
         </div>
       </section>
 
-            <section className={`sync-card ${isSupabaseConfigured ? 'connected' : 'local-only'}`}>
+            {/* <section className={`sync-card ${isSupabaseConfigured ? 'connected' : 'local-only'}`}>
         <div className="sync-main">
           <div className="sync-icon" aria-hidden="true">
             {isSupabaseConfigured ? <Cloud size={22} /> : <CloudOff size={22} />}
@@ -1070,7 +1070,7 @@ function App() {
             Save selected
           </button>
         </div>
-      </section>
+      </section> */}
 
       <section className="panel full-width-panel bill-set-panel">
         <div className="panel-header">

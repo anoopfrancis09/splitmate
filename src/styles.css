@@ -49,9 +49,9 @@ button {
 }
 
 .app-shell {
-  width: min(1180px, calc(100% - 32px));
-  margin: 0 auto;
-  padding: 24px 0 44px;
+  /* width: min(1180px, calc(100% - 32px)); */
+  margin: 24px;
+  /* padding: 24px 0 44px; */
 }
 
 .topbar {
@@ -669,7 +669,7 @@ select {
 
 @media (max-width: 640px) {
   .app-shell {
-    width: min(100% - 20px, 1180px);
+    /* width: min(100% - 20px, 1180px); */
     padding-top: 10px;
   }
 
@@ -1227,4 +1227,115 @@ select {
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
+}
+
+/* Mobile topbar: single line without scrollbar */
+@media (max-width: 640px) {
+  .topbar {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 10px;
+    border-radius: 999px;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .home-button,
+  .brand-mark {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    flex: 0 0 36px;
+  }
+
+  .brand {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 8px;
+    overflow: hidden;
+  }
+
+  .brand-text {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .brand-name,
+  .brand-subtitle {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .brand-name {
+    font-size: 0.85rem;
+  }
+
+  .brand-subtitle {
+    font-size: 0.68rem;
+  }
+
+  .topbar-actions {
+    flex: 0 0 auto;
+    width: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+
+  .role-badge {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    padding: 0;
+    border-radius: 50%;
+    overflow: hidden;
+    font-size: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .role-badge::first-letter {
+    font-size: 0.72rem;
+  }
+
+  .currency-select {
+    width: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 0;
+  }
+
+  .currency-select span {
+    display: none;
+  }
+
+  .currency-select select {
+    width: 64px;
+    min-width: 64px;
+    padding: 8px 6px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+  }
+
+  .logout-button {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .logout-button svg {
+    width: 15px;
+    height: 15px;
+  }
 }
