@@ -913,9 +913,8 @@ function App() {
           </div>
 
           <div className="login-heading">
-            <p className="eyebrow">Supabase account</p>
-            <h1>{authMode === 'login' ? 'Login to your bills.' : 'Create your bill-splitter account.'}</h1>
-            <p>Each account only sees the bill sets created under that username. Passwords are handled by Supabase Auth, not stored manually in the app.</p>
+            {/* <p className="eyebrow">Supabase account</p> */}
+            <h1>{authMode === 'login' ? 'Login' : 'Create your account.'}</h1>
           </div>
 
           {!isSupabaseConfigured ? (
@@ -931,7 +930,7 @@ function App() {
                   type="text"
                   value={authUsername}
                   onChange={(event) => setAuthUsername(normalizeUsername(event.target.value))}
-                  placeholder="e.g. anoop"
+                  placeholder="e.g. johndoe"
                   autoComplete="username"
                 />
               </div>
@@ -967,9 +966,9 @@ function App() {
             {authMode === 'login' ? 'New user? Register here' : 'Already registered? Login'}
           </button>
 
-          <p className="auth-note">
+          {/* <p className="auth-note">
             This uses Supabase Auth sessions. Your rows are protected by Row Level Security, so logged-in users only load their own bill sets.
-          </p>
+          </p> */}
         </section>
       </main>
     );
